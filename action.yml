@@ -1,0 +1,67 @@
+name: 'Setup Talos'
+description: 'Install and configure Talos - Secure, immutable, and minimal Linux OS for Kubernetes'
+author: 'fenio'
+
+branding:
+  icon: 'box'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Talos version to install (e.g., v1.8.0, latest)'
+    required: false
+    default: 'latest'
+  
+  cluster-name:
+    description: 'Name of the Talos cluster'
+    required: false
+    default: 'talos-ci'
+  
+  kubernetes-version:
+    description: 'Kubernetes version to use (e.g., v1.31.1)'
+    required: false
+    default: ''
+  
+  nodes:
+    description: 'Number of worker nodes to create (in addition to control plane)'
+    required: false
+    default: '0'
+  
+  talosctl-args:
+    description: 'Additional arguments to pass to talosctl cluster create'
+    required: false
+    default: ''
+  
+  wait-for-ready:
+    description: 'Wait for Talos cluster to be ready before completing'
+    required: false
+    default: 'true'
+  
+  timeout:
+    description: 'Timeout in seconds to wait for cluster readiness'
+    required: false
+    default: '300'
+
+outputs:
+  kubeconfig:
+    description: 'Path to the kubeconfig file'
+    value: ${{ steps.setup.outputs.kubeconfig }}
+  talosconfig:
+    description: 'Path to the talosconfig file'
+    value: ${{ steps.setup.outputs.talosconfig }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Talos
+      id: setup
+      shell: bash
+      run: ${{ github.action_path }}/setup.sh
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_CLUSTER_NAME: ${{ inputs.cluster-name }}
+        INPUT_KUBERNETES_VERSION: ${{ inputs.kubernetes-version }}
+        INPUT_NODES: ${{ inputs.nodes }}
+        INPUT_TALOSCTL_ARGS: ${{ inputs.talosctl-args }}
+        INPUT_WAIT_FOR_READY: ${{ inputs.wait-for-ready }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
