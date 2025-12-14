@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test-talos-functionality:
+    runs-on: ubuntu-latest
+    name: Test Talos Functionality
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check initial state
+        run: |
+          echo "=== Checking Initial System State ==="
+          ! which talosctl && echo "✓ talosctl not installed initially" || (echo "✗ talosctl already installed" && exit 1)
+          
+      - name: Setup Talos
+        id: talos
+        uses: ./
+        with:
+          version: 'latest'
+          cluster-name: 'talos-test'
+          nodes: '1'
+          wait-for-ready: 'true'
+          timeout: '300'
+      
+      - name: Verify Talos is installed and running
+        run: |
+          echo "=== Verifying Talos Installation ==="
+          which talosctl && echo "✓ talosctl binary found at $(which talosctl)" || (echo "✗ talosctl binary not found" && exit 1)
+          talosctl version --client
+          
+          # Check Docker containers (Talos runs in Docker for local development)
+          docker ps | grep talos && echo "✓ Talos containers are running" || (echo "✗ Talos containers not running" && exit 1)
+      
+      - name: Test Talos API access
+        env:
+          TALOSCONFIG: ${{ steps.talos.outputs.talosconfig }}
+        run: |
+          echo "=== Testing Talos API Access ==="
+          talosctl --nodes 127.0.0.1 version
+          talosctl --nodes 127.0.0.1 health --wait-timeout=30s
+      
+      - name: Test kubectl access
+        env:
+          KUBECONFIG: ${{ steps.talos.outputs.kubeconfig }}
+        run: |
+          echo "=== Testing Kubernetes Functionality ==="
+          kubectl version --client
+          kubectl cluster-info
+          kubectl get nodes -o wide
+          kubectl get pods -A
+          
+      - name: Deploy test workload
+        env:
+          KUBECONFIG: ${{ steps.talos.outputs.kubeconfig }}
+        run: |
+          echo "=== Deploying Test Workload ==="
+          
+          kubectl create deployment nginx --image=nginx:alpine
+          kubectl expose deployment nginx --port=80 --type=ClusterIP
+          kubectl wait --for=condition=available --timeout=120s deployment/nginx
+          
+          # Test connectivity
+          POD_NAME=$(kubectl get pod -l app=nginx -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec "$POD_NAME" -- wget -O- http://localhost:80 | grep -q "Welcome to nginx"
+          echo "✓ Workload is functioning correctly"
+      
+      - name: Test persistent volume
+        env:
+          KUBECONFIG: ${{ steps.talos.outputs.kubeconfig }}
+        run: |
+          echo "=== Testing Persistent Volumes ==="
+          
+          # Create a PVC
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: test-pvc
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 100Mi
+          EOF
+          
+          # Wait for PVC to be bound
+          kubectl wait --for=jsonpath='{.status.phase}'=Bound pvc/test-pvc --timeout=60s
+          kubectl get pvc test-pvc
+          echo "✓ Persistent volume provisioning works"
+      
+      - name: Verify cluster cleanup capability
+        run: |
+          echo "=== Testing Cluster Cleanup ==="
+          talosctl cluster destroy --name talos-test
+          echo "✓ Cluster destroyed successfully"
