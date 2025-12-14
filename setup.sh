@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
+echo "::group::Installing Talos"
 echo "Starting Talos setup..."
 
 # Read inputs
@@ -14,7 +15,7 @@ TIMEOUT="${INPUT_TIMEOUT:-300}"
 
 echo "Configuration: version=$VERSION, cluster-name=$CLUSTER_NAME, kubernetes-version=$KUBERNETES_VERSION, nodes=$NODES, wait-for-ready=$WAIT_FOR_READY, timeout=${TIMEOUT}s"
 
-# Step 1: Install Docker (required for Talos local cluster)
+# Install Docker (required for Talos local cluster)
 echo "::group::Checking Docker"
 if ! command -v docker &> /dev/null; then
     echo "Docker not found, installing..."
@@ -28,7 +29,7 @@ else
 fi
 echo "::endgroup::"
 
-# Step 1.5: Load br_netfilter kernel module (required for Flannel CNI in Docker)
+# Load br_netfilter kernel module (required for Flannel CNI in Docker)
 echo "::group::Loading kernel modules"
 if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
     echo "✓ br_netfilter module already loaded"
@@ -59,7 +60,7 @@ echo "=== Docker Info ==="
 docker info 2>/dev/null | grep -E "(CPUs|Total Memory|Storage Driver)" || true
 echo "::endgroup::"
 
-# Step 2: Resolve and install talosctl
+# Resolve and install talosctl
 echo "::group::Installing talosctl"
 
 if [ "$VERSION" = "latest" ]; then
@@ -105,7 +106,7 @@ talosctl version --client
 echo "✓ talosctl installed successfully"
 echo "::endgroup::"
 
-# Step 3: Create Talos cluster
+# Create Talos cluster
 echo "::group::Creating Talos cluster"
 
 # Build cluster create command
@@ -139,7 +140,7 @@ echo "::group::Docker Containers"
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | head -20
 echo "::endgroup::"
 
-# Step 4: Set config paths
+# Set config paths
 TALOSCONFIG_PATH="$HOME/.talos/config"
 KUBECONFIG_PATH="$HOME/.kube/config"
 
@@ -151,7 +152,7 @@ echo "TALOSCONFIG_PATH: $TALOSCONFIG_PATH"
 # Get the control plane node IP
 CP_NODE="10.5.0.2"
 
-# Step 5: Wait for Talos API and bootstrap
+# Wait for Talos API and bootstrap
 echo "::group::Bootstrapping cluster"
 START_TIME=$(date +%s)
 
@@ -198,7 +199,7 @@ while true; do
 done
 echo "::endgroup::"
 
-# Step 6: Get kubeconfig
+# Get kubeconfig
 echo "::group::Configuring kubectl"
 echo "Waiting for Kubernetes API to be available..."
 while true; do
@@ -227,7 +228,7 @@ echo "TALOSCONFIG exported: $TALOSCONFIG_PATH"
 echo "KUBECONFIG exported: $KUBECONFIG_PATH"
 echo "::endgroup::"
 
-# Step 7: Wait for cluster ready if requested
+# Wait for cluster ready if requested
 if [ "$WAIT_FOR_READY" = "true" ]; then
     echo "::group::Waiting for cluster ready"
     echo "Waiting for Kubernetes cluster to be fully ready (timeout: ${TIMEOUT}s)..."
