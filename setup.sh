@@ -28,6 +28,25 @@ else
 fi
 echo "::endgroup::"
 
+# Step 1.5: Load br_netfilter kernel module (required for Flannel CNI in Docker)
+echo "::group::Loading kernel modules"
+if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
+    echo "✓ br_netfilter module already loaded"
+else
+    echo "Loading br_netfilter module..."
+    sudo modprobe br_netfilter || echo "::warning::Failed to load br_netfilter module"
+    if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
+        echo "✓ br_netfilter module loaded successfully"
+    else
+        echo "::warning::br_netfilter module not available - Flannel may fail"
+    fi
+fi
+# Enable bridge netfilter
+echo "Enabling bridge-nf-call-iptables..."
+sudo sysctl -w net.bridge.bridge-nf-call-iptables=1 2>/dev/null || true
+sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true
+echo "::endgroup::"
+
 # Debug: Show system resources
 echo "::group::System Resources"
 echo "=== CPU Info ==="
