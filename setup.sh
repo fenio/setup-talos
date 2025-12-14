@@ -247,10 +247,19 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
                 kubectl --kubeconfig "$KUBECONFIG_PATH" logs -n kube-system "$pod" --tail=50 2>&1 || true
             done
             echo ""
-            echo "--- Flannel logs ---"
+            echo "--- Flannel pod details ---"
+            kubectl --kubeconfig "$KUBECONFIG_PATH" describe pods -n kube-system -l app=flannel 2>&1 | tail -100 || true
+            echo ""
+            echo "--- Flannel logs (current) ---"
             for pod in $(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system -l app=flannel -o name 2>/dev/null); do
                 echo "Logs for $pod:"
-                kubectl --kubeconfig "$KUBECONFIG_PATH" logs -n kube-system "$pod" --tail=50 2>&1 || true
+                kubectl --kubeconfig "$KUBECONFIG_PATH" logs -n kube-system "$pod" --all-containers --tail=50 2>&1 || true
+            done
+            echo ""
+            echo "--- Flannel logs (previous) ---"
+            for pod in $(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system -l app=flannel -o name 2>/dev/null); do
+                echo "Previous logs for $pod:"
+                kubectl --kubeconfig "$KUBECONFIG_PATH" logs -n kube-system "$pod" --all-containers --previous --tail=50 2>&1 || true
             done
             echo ""
             echo "--- Recent events ---"

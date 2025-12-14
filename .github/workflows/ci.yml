@@ -26,7 +26,7 @@ jobs:
         with:
           version: 'latest'
           cluster-name: 'talos-test'
-          nodes: '1'
+          nodes: '0'
           wait-for-ready: 'true'
           timeout: '600'
       
