@@ -9,45 +9,113 @@ VERSION="${INPUT_VERSION:-latest}"
 CLUSTER_NAME="${INPUT_CLUSTER_NAME:-talos-ci}"
 KUBERNETES_VERSION="${INPUT_KUBERNETES_VERSION:-}"
 NODES="${INPUT_NODES:-0}"
+PROVISIONER="${INPUT_PROVISIONER:-docker}"
+CPUS="${INPUT_CPUS:-2}"
+MEMORY="${INPUT_MEMORY:-2048}"
+DISK="${INPUT_DISK:-6144}"
+WITH_UEFI="${INPUT_WITH_UEFI:-true}"
 TALOSCTL_ARGS="${INPUT_TALOSCTL_ARGS:-}"
 WAIT_FOR_READY="${INPUT_WAIT_FOR_READY:-true}"
 TIMEOUT="${INPUT_TIMEOUT:-300}"
 DNS_READINESS="${INPUT_DNS_READINESS:-true}"
 
-echo "Configuration: version=$VERSION, cluster-name=$CLUSTER_NAME, kubernetes-version=$KUBERNETES_VERSION, nodes=$NODES, wait-for-ready=$WAIT_FOR_READY, timeout=${TIMEOUT}s, dns-readiness=$DNS_READINESS"
+echo "Configuration: version=$VERSION, cluster-name=$CLUSTER_NAME, kubernetes-version=$KUBERNETES_VERSION, nodes=$NODES, provisioner=$PROVISIONER, wait-for-ready=$WAIT_FOR_READY, timeout=${TIMEOUT}s, dns-readiness=$DNS_READINESS"
 
-# Install Docker (required for Talos local cluster)
-echo "::group::Checking Docker"
-if ! command -v docker &> /dev/null; then
-    echo "Docker not found, installing..."
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
-    sudo usermod -aG docker "$USER"
-    rm get-docker.sh
-    echo "✓ Docker installed"
-else
-    echo "✓ Docker already installed"
+if [ "$PROVISIONER" = "qemu" ]; then
+    echo "QEMU configuration: cpus=$CPUS, memory=${MEMORY}MB, disk=${DISK}MB, uefi=$WITH_UEFI"
 fi
-echo "::endgroup::"
 
-# Load br_netfilter kernel module (required for Flannel CNI in Docker)
-echo "::group::Loading kernel modules"
-if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
-    echo "✓ br_netfilter module already loaded"
-else
-    echo "Loading br_netfilter module..."
-    sudo modprobe br_netfilter || echo "::warning::Failed to load br_netfilter module"
-    if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
-        echo "✓ br_netfilter module loaded successfully"
+# Validate provisioner
+if [ "$PROVISIONER" != "docker" ] && [ "$PROVISIONER" != "qemu" ]; then
+    echo "::error::Invalid provisioner '$PROVISIONER'. Must be 'docker' or 'qemu'."
+    exit 1
+fi
+
+# Install Docker (required for Docker provisioner)
+if [ "$PROVISIONER" = "docker" ]; then
+    echo "::group::Checking Docker"
+    if ! command -v docker &> /dev/null; then
+        echo "Docker not found, installing..."
+        curl -fsSL https://get.docker.com -o get-docker.sh
+        sudo sh get-docker.sh
+        sudo usermod -aG docker "$USER"
+        rm get-docker.sh
+        echo "✓ Docker installed"
     else
-        echo "::warning::br_netfilter module not available - Flannel may fail"
+        echo "✓ Docker already installed"
     fi
+    echo "::endgroup::"
+
+    # Load br_netfilter kernel module (required for Flannel CNI in Docker)
+    echo "::group::Loading kernel modules"
+    if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
+        echo "✓ br_netfilter module already loaded"
+    else
+        echo "Loading br_netfilter module..."
+        sudo modprobe br_netfilter || echo "::warning::Failed to load br_netfilter module"
+        if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
+            echo "✓ br_netfilter module loaded successfully"
+        else
+            echo "::warning::br_netfilter module not available - Flannel may fail"
+        fi
+    fi
+    # Enable bridge netfilter
+    echo "Enabling bridge-nf-call-iptables..."
+    sudo sysctl -w net.bridge.bridge-nf-call-iptables=1 2>/dev/null || true
+    sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true
+    echo "::endgroup::"
 fi
-# Enable bridge netfilter
-echo "Enabling bridge-nf-call-iptables..."
-sudo sysctl -w net.bridge.bridge-nf-call-iptables=1 2>/dev/null || true
-sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true
-echo "::endgroup::"
+
+# Install QEMU and dependencies (required for QEMU provisioner)
+if [ "$PROVISIONER" = "qemu" ]; then
+    echo "::group::Checking KVM support"
+    
+    # Check for KVM support
+    if [ ! -e /dev/kvm ]; then
+        echo "::error::KVM is not available. QEMU provisioner requires hardware virtualization support."
+        echo "If running in a VM, ensure nested virtualization is enabled."
+        echo "If running on GitHub Actions, you need a self-hosted runner with KVM support."
+        exit 1
+    fi
+    
+    # Check KVM is accessible
+    if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+        echo "KVM device exists but is not accessible. Attempting to fix permissions..."
+        sudo chmod 666 /dev/kvm || {
+            echo "::error::Cannot access /dev/kvm. Please ensure your user has access to KVM."
+            exit 1
+        }
+    fi
+    
+    echo "✓ KVM is available and accessible"
+    echo "::endgroup::"
+    
+    echo "::group::Installing QEMU dependencies"
+    if command -v qemu-system-x86_64 &> /dev/null && command -v qemu-img &> /dev/null; then
+        echo "✓ QEMU already installed"
+    else
+        echo "Installing QEMU and dependencies..."
+        sudo apt-get update
+        sudo apt-get install -y \
+            qemu-system-x86 \
+            qemu-utils \
+            libvirt-daemon-system \
+            libvirt-clients \
+            ovmf \
+            bridge-utils
+        
+        # Start libvirtd if not running
+        sudo systemctl start libvirtd 2>/dev/null || true
+        sudo systemctl enable libvirtd 2>/dev/null || true
+        
+        # Add user to required groups
+        sudo usermod -aG libvirt "$USER" 2>/dev/null || true
+        sudo usermod -aG kvm "$USER" 2>/dev/null || true
+        
+        echo "✓ QEMU and dependencies installed"
+    fi
+    echo "::endgroup::"
+fi
 
 # Debug: Show system resources
 echo "::group::System Resources"
@@ -57,8 +125,15 @@ echo "=== Memory Info ==="
 free -h 2>/dev/null || cat /proc/meminfo | head -5
 echo "=== Disk Space ==="
 df -h / | head -2
-echo "=== Docker Info ==="
-docker info 2>/dev/null | grep -E "(CPUs|Total Memory|Storage Driver)" || true
+if [ "$PROVISIONER" = "docker" ]; then
+    echo "=== Docker Info ==="
+    docker info 2>/dev/null | grep -E "(CPUs|Total Memory|Storage Driver)" || true
+elif [ "$PROVISIONER" = "qemu" ]; then
+    echo "=== KVM Info ==="
+    ls -la /dev/kvm 2>/dev/null || echo "/dev/kvm not found"
+    echo "=== QEMU Version ==="
+    qemu-system-x86_64 --version 2>/dev/null | head -1 || echo "QEMU not found"
+fi
 echo "::endgroup::"
 
 # Resolve and install talosctl
@@ -112,8 +187,20 @@ echo "::group::Creating Talos cluster"
 
 # Build cluster create command
 # Skip built-in wait - we'll handle readiness checking ourselves with better diagnostics
-# Disable IPv6 to avoid network issues in Docker
-CLUSTER_CMD="talosctl cluster create --name $CLUSTER_NAME --wait=false --docker-disable-ipv6"
+CLUSTER_CMD="talosctl cluster create --name $CLUSTER_NAME --wait=false --provisioner=$PROVISIONER"
+
+# Add provisioner-specific options
+if [ "$PROVISIONER" = "docker" ]; then
+    # Disable IPv6 to avoid network issues in Docker
+    CLUSTER_CMD+=" --docker-disable-ipv6"
+elif [ "$PROVISIONER" = "qemu" ]; then
+    # Add QEMU-specific options
+    CLUSTER_CMD+=" --cpus $CPUS --memory $MEMORY --disk $DISK"
+    
+    if [ "$WITH_UEFI" = "true" ]; then
+        CLUSTER_CMD+=" --with-uefi"
+    fi
+fi
 
 # Add workers if specified
 if [ "$NODES" -gt 0 ]; then
@@ -133,12 +220,17 @@ fi
 echo "Creating cluster with command: $CLUSTER_CMD"
 eval "$CLUSTER_CMD"
 
-echo "✓ Talos containers created"
+echo "✓ Talos cluster created"
 echo "::endgroup::"
 
-# Debug: Show Docker containers after cluster creation
-echo "::group::Docker Containers"
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | head -20
+# Debug: Show cluster status after creation
+echo "::group::Cluster Status"
+if [ "$PROVISIONER" = "docker" ]; then
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | head -20
+elif [ "$PROVISIONER" = "qemu" ]; then
+    echo "QEMU VMs created. Checking libvirt domains..."
+    sudo virsh list --all 2>/dev/null || echo "virsh not available, skipping VM list"
+fi
 echo "::endgroup::"
 
 # Set config paths
@@ -151,6 +243,7 @@ mkdir -p "$HOME/.kube"
 echo "TALOSCONFIG_PATH: $TALOSCONFIG_PATH"
 
 # Get the control plane node IP
+# Docker uses 10.5.0.2 by default, QEMU uses 10.5.0.2 as well (talosctl default)
 CP_NODE="10.5.0.2"
 
 # Wait for Talos API and bootstrap
@@ -162,7 +255,11 @@ while true; do
     ELAPSED=$(($(date +%s) - START_TIME))
     if [ "$ELAPSED" -gt "$TIMEOUT" ]; then
         echo "::error::Timeout waiting for Talos API"
-        docker ps -a
+        if [ "$PROVISIONER" = "docker" ]; then
+            docker ps -a
+        elif [ "$PROVISIONER" = "qemu" ]; then
+            sudo virsh list --all 2>/dev/null || true
+        fi
         exit 1
     fi
     
@@ -250,8 +347,13 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
             echo "--- Talos services ---"
             talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" services 2>&1 || true
             echo ""
-            echo "--- Docker containers ---"
-            docker ps -a --format "table {{.Names}}\t{{.Status}}" 2>&1 || true
+            if [ "$PROVISIONER" = "docker" ]; then
+                echo "--- Docker containers ---"
+                docker ps -a --format "table {{.Names}}\t{{.Status}}" 2>&1 || true
+            elif [ "$PROVISIONER" = "qemu" ]; then
+                echo "--- QEMU VMs ---"
+                sudo virsh list --all 2>&1 || true
+            fi
             echo ""
             echo "--- Kubernetes nodes ---"
             kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes -o wide 2>&1 || true

@@ -27,6 +27,31 @@ inputs:
     required: false
     default: '0'
   
+  provisioner:
+    description: 'Provisioner to use for the cluster (docker or qemu)'
+    required: false
+    default: 'docker'
+  
+  cpus:
+    description: 'Number of CPUs per node (QEMU only)'
+    required: false
+    default: '2'
+  
+  memory:
+    description: 'Memory per node in MB (QEMU only)'
+    required: false
+    default: '2048'
+  
+  disk:
+    description: 'Disk size in MB (QEMU only)'
+    required: false
+    default: '6144'
+  
+  with-uefi:
+    description: 'Use UEFI boot instead of BIOS (QEMU only, recommended)'
+    required: false
+    default: 'true'
+  
   talosctl-args:
     description: 'Additional arguments to pass to talosctl cluster create'
     required: false
@@ -66,6 +91,11 @@ runs:
         INPUT_CLUSTER_NAME: ${{ inputs.cluster-name }}
         INPUT_KUBERNETES_VERSION: ${{ inputs.kubernetes-version }}
         INPUT_NODES: ${{ inputs.nodes }}
+        INPUT_PROVISIONER: ${{ inputs.provisioner }}
+        INPUT_CPUS: ${{ inputs.cpus }}
+        INPUT_MEMORY: ${{ inputs.memory }}
+        INPUT_DISK: ${{ inputs.disk }}
+        INPUT_WITH_UEFI: ${{ inputs.with-uefi }}
         INPUT_TALOSCTL_ARGS: ${{ inputs.talosctl-args }}
         INPUT_WAIT_FOR_READY: ${{ inputs.wait-for-ready }}
         INPUT_TIMEOUT: ${{ inputs.timeout }}
