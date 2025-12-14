@@ -28,7 +28,7 @@ jobs:
           cluster-name: 'talos-test'
           nodes: '1'
           wait-for-ready: 'true'
-          timeout: '300'
+          timeout: '600'
       
       - name: Verify Talos is installed and running
         run: |
