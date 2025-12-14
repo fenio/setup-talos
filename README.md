@@ -51,6 +51,7 @@ jobs:
 | `talosctl-args` | Additional arguments to pass to `talosctl cluster create` | `""` |
 | `wait-for-ready` | Wait for cluster to be ready before completing | `true` |
 | `timeout` | Timeout in seconds to wait for cluster readiness | `300` |
+| `dns-readiness` | Wait for CoreDNS to be ready and verify DNS resolution works | `true` |
 
 ## Outputs
 
