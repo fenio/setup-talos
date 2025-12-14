@@ -90,9 +90,8 @@ echo "::endgroup::"
 echo "::group::Creating Talos cluster"
 
 # Build cluster create command
-# Use the action timeout for talosctl wait-timeout (add 60s buffer for cluster creation itself)
-WAIT_TIMEOUT=$((TIMEOUT + 60))
-CLUSTER_CMD="talosctl cluster create --name $CLUSTER_NAME --wait-timeout ${WAIT_TIMEOUT}s"
+# Skip built-in wait - we'll handle readiness checking ourselves with better diagnostics
+CLUSTER_CMD="talosctl cluster create --name $CLUSTER_NAME --wait=false"
 
 # Add workers if specified
 if [ "$NODES" -gt 0 ]; then
@@ -112,7 +111,7 @@ fi
 echo "Creating cluster with command: $CLUSTER_CMD"
 eval "$CLUSTER_CMD"
 
-echo "✓ Talos cluster created successfully"
+echo "✓ Talos containers created"
 echo "::endgroup::"
 
 # Debug: Show Docker containers after cluster creation
@@ -127,9 +126,76 @@ KUBECONFIG_PATH="$HOME/.kube/config"
 # Ensure kubeconfig directory exists
 mkdir -p "$HOME/.kube"
 
-# Merge kubeconfig
-echo "Merging kubeconfig..."
-talosctl kubeconfig "$KUBECONFIG_PATH"
+echo "TALOSCONFIG_PATH: $TALOSCONFIG_PATH"
+
+# Get the control plane node IP
+CP_NODE="10.5.0.2"
+
+# Step 5: Wait for Talos API and bootstrap
+echo "::group::Bootstrapping cluster"
+START_TIME=$(date +%s)
+
+echo "Waiting for Talos API to be ready..."
+while true; do
+    ELAPSED=$(($(date +%s) - START_TIME))
+    if [ "$ELAPSED" -gt "$TIMEOUT" ]; then
+        echo "::error::Timeout waiting for Talos API"
+        docker ps -a
+        exit 1
+    fi
+    
+    if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" version &>/dev/null; then
+        echo "✓ Talos API is responding"
+        break
+    fi
+    echo "Waiting for Talos API... (${ELAPSED}s)"
+    sleep 3
+done
+
+echo "Bootstrapping etcd..."
+# Bootstrap might fail if already bootstrapped, that's OK
+if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" bootstrap 2>&1; then
+    echo "✓ Bootstrap initiated"
+else
+    echo "Bootstrap command returned non-zero (may already be bootstrapped)"
+fi
+
+echo "Waiting for etcd to be healthy..."
+while true; do
+    ELAPSED=$(($(date +%s) - START_TIME))
+    if [ "$ELAPSED" -gt "$TIMEOUT" ]; then
+        echo "::error::Timeout waiting for etcd"
+        talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" services || true
+        exit 1
+    fi
+    
+    if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" service etcd 2>&1 | grep -q "STATE.*Running"; then
+        echo "✓ etcd is running"
+        break
+    fi
+    echo "Waiting for etcd... (${ELAPSED}s)"
+    sleep 3
+done
+echo "::endgroup::"
+
+# Step 6: Get kubeconfig
+echo "::group::Configuring kubectl"
+echo "Waiting for Kubernetes API to be available..."
+while true; do
+    ELAPSED=$(($(date +%s) - START_TIME))
+    if [ "$ELAPSED" -gt "$TIMEOUT" ]; then
+        echo "::error::Timeout waiting for Kubernetes API"
+        talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" services || true
+        exit 1
+    fi
+    
+    if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" kubeconfig "$KUBECONFIG_PATH" --force 2>/dev/null; then
+        echo "✓ Kubeconfig retrieved"
+        break
+    fi
+    echo "Waiting for kubeconfig... (${ELAPSED}s)"
+    sleep 3
+done
 
 # Set outputs
 echo "talosconfig=$TALOSCONFIG_PATH" >> "$GITHUB_OUTPUT"
@@ -139,17 +205,15 @@ echo "KUBECONFIG=$KUBECONFIG_PATH" >> "$GITHUB_ENV"
 
 echo "TALOSCONFIG exported: $TALOSCONFIG_PATH"
 echo "KUBECONFIG exported: $KUBECONFIG_PATH"
+echo "::endgroup::"
 
-# Step 5: Wait for cluster ready if requested
+# Step 7: Wait for cluster ready if requested
 if [ "$WAIT_FOR_READY" = "true" ]; then
     echo "::group::Waiting for cluster ready"
-    echo "Waiting for Talos cluster to be ready (timeout: ${TIMEOUT}s)..."
+    echo "Waiting for Kubernetes cluster to be fully ready (timeout: ${TIMEOUT}s)..."
     
-    START_TIME=$(date +%s)
     LAST_STATUS_TIME=0
     
-    # Wait for API server
-    echo "Waiting for Kubernetes API server..."
     while true; do
         CURRENT_TIME=$(date +%s)
         ELAPSED=$((CURRENT_TIME - START_TIME))
@@ -159,10 +223,10 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
             echo ""
             echo "=== Diagnostic Information ==="
             echo "--- Talos cluster health ---"
-            talosctl --nodes 127.0.0.1 --talosconfig "$TALOSCONFIG_PATH" health --wait-timeout=10s 2>&1 || true
+            talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" health --wait-timeout=10s 2>&1 || true
             echo ""
             echo "--- Talos services ---"
-            talosctl --nodes 127.0.0.1 --talosconfig "$TALOSCONFIG_PATH" services 2>&1 || true
+            talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" services 2>&1 || true
             echo ""
             echo "--- Docker containers ---"
             docker ps -a --format "table {{.Names}}\t{{.Status}}" 2>&1 || true
@@ -176,6 +240,12 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
             echo "--- CoreDNS pod details ---"
             kubectl --kubeconfig "$KUBECONFIG_PATH" describe pods -n kube-system -l k8s-app=kube-dns 2>&1 || true
             echo ""
+            echo "--- CoreDNS logs ---"
+            for pod in $(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system -l k8s-app=kube-dns -o name 2>/dev/null); do
+                echo "Logs for $pod:"
+                kubectl --kubeconfig "$KUBECONFIG_PATH" logs -n kube-system "$pod" --tail=50 2>&1 || true
+            done
+            echo ""
             echo "--- Recent events ---"
             kubectl --kubeconfig "$KUBECONFIG_PATH" get events -n kube-system --sort-by='.lastTimestamp' 2>&1 | tail -30 || true
             exit 1
@@ -186,6 +256,8 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
             LAST_STATUS_TIME=$CURRENT_TIME
             echo ""
             echo "=== Status at ${ELAPSED}s ==="
+            echo "Talos services:"
+            talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" services 2>/dev/null | grep -E "SERVICE|etcd|kubelet|apid" || echo "  (not available)"
             echo "Nodes:"
             kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes --no-headers 2>/dev/null || echo "  (not available yet)"
             echo "Pods in kube-system:"
@@ -195,41 +267,50 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
         
         # Check if kubectl can connect
         if kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes --no-headers &>/dev/null; then
-            # Check if node is Ready
+            # Check if control plane node is Ready
             if kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes --no-headers | grep -q " Ready "; then
-                echo "✓ Control plane node is Ready"
+                # Check for CoreDNS pods existing (not necessarily ready yet)
+                COREDNS_STATUS=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system -l k8s-app=kube-dns --no-headers 2>/dev/null || echo "")
                 
-                # Check for system pods readiness
-                if kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system -l k8s-app=kube-dns --no-headers 2>/dev/null | grep -q "Running"; then
-                    echo "✓ CoreDNS is running"
+                if echo "$COREDNS_STATUS" | grep -q "Running"; then
+                    # Check if CoreDNS is actually ready (all containers ready)
+                    COREDNS_READY=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system -l k8s-app=kube-dns -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
                     
-                    # Check for no critical pods failing
-                    CRITICAL_FAILING=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system --no-headers 2>/dev/null | grep -cE "Error|CrashLoopBackOff" || echo "0")
-                    
-                    if [ "$CRITICAL_FAILING" = "0" ]; then
-                        echo "✓ No critical pods failing"
+                    if echo "$COREDNS_READY" | grep -q "True"; then
+                        echo "✓ CoreDNS is running and ready"
                         
-                        # Verify all expected nodes are ready
-                        EXPECTED_NODES=$((NODES + 1))  # workers + control plane
-                        READY_NODES=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes --no-headers | grep -c " Ready " || echo "0")
+                        # Check for no critical pods failing
+                        CRITICAL_FAILING=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system --no-headers 2>/dev/null | grep -cE "Error|CrashLoopBackOff" || echo "0")
                         
-                        if [ "$READY_NODES" -ge "$EXPECTED_NODES" ]; then
-                            echo "✓ All $EXPECTED_NODES nodes are ready"
+                        if [ "$CRITICAL_FAILING" = "0" ]; then
+                            echo "✓ No critical pods failing"
                             
-                            # Show cluster info
-                            echo ""
-                            echo "=== Cluster Information ==="
-                            kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes -o wide
-                            kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -A
+                            # Verify all expected nodes are ready
+                            EXPECTED_NODES=$((NODES + 1))  # workers + control plane
+                            READY_NODES=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes --no-headers | grep -c " Ready " || echo "0")
                             
-                            echo ""
-                            echo "✓ Talos cluster is fully ready!"
-                            echo "::endgroup::"
-                            break
-                        else
-                            echo "Waiting for all nodes to be ready ($READY_NODES/$EXPECTED_NODES ready)..."
+                            if [ "$READY_NODES" -ge "$EXPECTED_NODES" ]; then
+                                echo "✓ All $EXPECTED_NODES nodes are ready"
+                                
+                                # Show cluster info
+                                echo ""
+                                echo "=== Cluster Information ==="
+                                kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes -o wide
+                                kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -A
+                                
+                                echo ""
+                                echo "✓ Talos cluster is fully ready!"
+                                echo "::endgroup::"
+                                break
+                            else
+                                echo "Waiting for all nodes to be ready ($READY_NODES/$EXPECTED_NODES ready)..."
+                            fi
                         fi
+                    else
+                        echo "CoreDNS pods exist but not ready yet..."
                     fi
+                elif [ -n "$COREDNS_STATUS" ]; then
+                    echo "CoreDNS status: $(echo "$COREDNS_STATUS" | awk '{print $3}' | head -1)"
                 fi
             fi
         fi
