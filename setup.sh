@@ -302,8 +302,9 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
         
         # Check if kubectl can connect
         if kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes --no-headers &>/dev/null; then
-            # Check if control plane node is Ready
-            if kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes --no-headers | grep -q " Ready "; then
+            # Check if any node is Ready (use word boundary matching)
+            NODES_OUTPUT=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes --no-headers 2>/dev/null)
+            if echo "$NODES_OUTPUT" | grep -qE '\bReady\b'; then
                 # Check for CoreDNS pods existing (not necessarily ready yet)
                 COREDNS_STATUS=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system -l k8s-app=kube-dns --no-headers 2>/dev/null || echo "")
                 
@@ -314,15 +315,16 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
                     if echo "$COREDNS_READY" | grep -q "True"; then
                         echo "✓ CoreDNS is running and ready"
                         
-                        # Check for no critical pods failing
-                        CRITICAL_FAILING=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system --no-headers 2>/dev/null | grep -cE "Error|CrashLoopBackOff" || echo "0")
+                        # Check for no critical pods failing (match Error or CrashLoopBackOff as whole words in status)
+                        PODS_OUTPUT=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system --no-headers 2>/dev/null)
+                        CRITICAL_FAILING=$(echo "$PODS_OUTPUT" | grep -cE '\b(Error|CrashLoopBackOff)\b' || echo "0")
                         
                         if [ "$CRITICAL_FAILING" = "0" ]; then
                             echo "✓ No critical pods failing"
                             
                             # Verify all expected nodes are ready
                             EXPECTED_NODES=$((NODES + 1))  # workers + control plane
-                            READY_NODES=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get nodes --no-headers | grep -c " Ready " || echo "0")
+                            READY_NODES=$(echo "$NODES_OUTPUT" | grep -cE '\bReady\b' || echo "0")
                             
                             if [ "$READY_NODES" -ge "$EXPECTED_NODES" ]; then
                                 echo "✓ All $EXPECTED_NODES nodes are ready"
@@ -340,14 +342,22 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
                             else
                                 echo "Waiting for all nodes to be ready ($READY_NODES/$EXPECTED_NODES ready)..."
                             fi
+                        else
+                            echo "DEBUG: Critical failing check failed: CRITICAL_FAILING='$CRITICAL_FAILING'"
                         fi
                     else
-                        echo "CoreDNS pods exist but not ready yet..."
+                        echo "CoreDNS pods exist but not ready yet (COREDNS_READY='$COREDNS_READY')..."
                     fi
                 elif [ -n "$COREDNS_STATUS" ]; then
                     echo "CoreDNS status: $(echo "$COREDNS_STATUS" | awk '{print $3}' | head -1)"
+                else
+                    echo "DEBUG: No CoreDNS pods found yet"
                 fi
+            else
+                echo "DEBUG: No nodes with Ready status found"
             fi
+        else
+            echo "DEBUG: kubectl get nodes failed"
         fi
         
         echo "Cluster not ready yet, waiting... (${ELAPSED}/${TIMEOUT}s)"
