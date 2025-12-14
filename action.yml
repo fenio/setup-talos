@@ -56,7 +56,6 @@ runs:
     - name: Setup Talos
       id: setup
       shell: bash
-      run: ${{ github.action_path }}/setup.sh
       env:
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_CLUSTER_NAME: ${{ inputs.cluster-name }}
@@ -65,3 +64,4 @@ runs:
         INPUT_TALOSCTL_ARGS: ${{ inputs.talosctl-args }}
         INPUT_WAIT_FOR_READY: ${{ inputs.wait-for-ready }}
         INPUT_TIMEOUT: ${{ inputs.timeout }}
+      run: ${{ github.action_path }}/setup.sh

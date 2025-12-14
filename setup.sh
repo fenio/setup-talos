@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
 echo "Starting Talos setup..."
@@ -80,7 +80,7 @@ case "$ARCH" in
     x86_64)
         BINARY_ARCH="amd64"
         ;;
-    aarch64)
+    aarch64|arm64)
         BINARY_ARCH="arm64"
         ;;
     *)
