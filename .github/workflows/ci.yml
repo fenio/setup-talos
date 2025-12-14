@@ -2,26 +2,31 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  test-talos-functionality:
+  test:
     runs-on: ubuntu-latest
-    name: Test Talos Functionality
-    
+    name: Test Talos
+
     steps:
-      - uses: actions/checkout@v6
-      
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Check initial state
         run: |
-          echo "=== Checking Initial System State ==="
-          ! which talosctl && echo "✓ talosctl not installed initially" || (echo "✗ talosctl already installed" && exit 1)
-          
+          echo "=== Checking initial system state ==="
+          if command -v talosctl &> /dev/null; then
+            echo "✗ talosctl already installed"
+            exit 1
+          fi
+          echo "✓ talosctl not installed"
+
       - name: Setup Talos
-        id: talos
+        id: setup
         uses: ./
         with:
           version: 'latest'
@@ -29,67 +34,61 @@ jobs:
           nodes: '1'
           wait-for-ready: 'true'
           timeout: '600'
-      
-      - name: Verify Talos is installed and running
+
+      - name: Verify installation
         run: |
-          echo "=== Verifying Talos Installation ==="
-          which talosctl && echo "✓ talosctl binary found at $(which talosctl)" || (echo "✗ talosctl binary not found" && exit 1)
+          echo "=== Verifying installation ==="
+          command -v talosctl && echo "✓ talosctl binary found" || { echo "✗ talosctl binary not found"; exit 1; }
           talosctl version --client
-          
-          # Check Docker containers (Talos runs in Docker for local development)
-          docker ps | grep talos && echo "✓ Talos containers are running" || (echo "✗ Talos containers not running" && exit 1)
-      
+          docker ps | grep talos && echo "✓ Talos containers are running" || { echo "✗ Talos containers not running"; exit 1; }
+
       - name: Test Talos API access
         env:
-          TALOSCONFIG: ${{ steps.talos.outputs.talosconfig }}
+          TALOSCONFIG: ${{ steps.setup.outputs.talosconfig }}
         run: |
-          echo "=== Testing Talos API Access ==="
+          echo "=== Testing Talos API access ==="
           talosctl --nodes 127.0.0.1 version
           talosctl --nodes 127.0.0.1 health --wait-timeout=30s
-      
+
       - name: Test kubectl access
         env:
-          KUBECONFIG: ${{ steps.talos.outputs.kubeconfig }}
+          KUBECONFIG: ${{ steps.setup.outputs.kubeconfig }}
         run: |
-          echo "=== Testing Kubernetes Functionality ==="
+          echo "=== Testing kubectl access ==="
           kubectl version --client
           kubectl cluster-info
           kubectl get nodes -o wide
           kubectl get pods -A
-          
+
       - name: Deploy test workload
         env:
-          KUBECONFIG: ${{ steps.talos.outputs.kubeconfig }}
+          KUBECONFIG: ${{ steps.setup.outputs.kubeconfig }}
         run: |
-          echo "=== Deploying Test Workload ==="
-          
+          echo "=== Deploying test workload ==="
           kubectl create deployment nginx --image=nginx:alpine
           kubectl expose deployment nginx --port=80 --type=ClusterIP
           kubectl wait --for=condition=available --timeout=120s deployment/nginx
-          
-          # Test connectivity
+
           POD_NAME=$(kubectl get pod -l app=nginx -o jsonpath='{.items[0].metadata.name}')
           kubectl exec "$POD_NAME" -- wget -O- http://localhost:80 | grep -q "Welcome to nginx"
           echo "✓ Workload is functioning correctly"
-      
-      - name: Test internet connectivity from pod
+
+      - name: Test pod networking
         env:
-          KUBECONFIG: ${{ steps.talos.outputs.kubeconfig }}
+          KUBECONFIG: ${{ steps.setup.outputs.kubeconfig }}
         run: |
-          echo "=== Testing Internet Connectivity from Pod ==="
-          
+          echo "=== Testing pod networking ==="
           kubectl run connectivity-test --image=busybox:stable --restart=Never -- sleep 300
           kubectl wait --for=condition=ready --timeout=60s pod/connectivity-test
-          
-          # Test DNS resolution and external connectivity
+
           kubectl exec connectivity-test -- nslookup google.com
           kubectl exec connectivity-test -- wget -q -O- --timeout=10 http://ifconfig.me && echo ""
-          echo "✓ Internet connectivity from pod is working"
-          
+          echo "✓ Pod networking is working"
+
           kubectl delete pod connectivity-test --ignore-not-found
-      
-      - name: Verify cluster cleanup capability
+
+      - name: Test cluster cleanup
         run: |
-          echo "=== Testing Cluster Cleanup ==="
+          echo "=== Testing cluster cleanup ==="
           talosctl cluster destroy --name talos-test
           echo "✓ Cluster destroyed successfully"
