@@ -91,7 +91,8 @@ echo "::group::Creating Talos cluster"
 
 # Build cluster create command
 # Skip built-in wait - we'll handle readiness checking ourselves with better diagnostics
-CLUSTER_CMD="talosctl cluster create --name $CLUSTER_NAME --wait=false"
+# Disable IPv6 to avoid network issues in Docker
+CLUSTER_CMD="talosctl cluster create --name $CLUSTER_NAME --wait=false --docker-disable-ipv6"
 
 # Add workers if specified
 if [ "$NODES" -gt 0 ]; then
@@ -242,6 +243,12 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
             echo ""
             echo "--- CoreDNS logs ---"
             for pod in $(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system -l k8s-app=kube-dns -o name 2>/dev/null); do
+                echo "Logs for $pod:"
+                kubectl --kubeconfig "$KUBECONFIG_PATH" logs -n kube-system "$pod" --tail=50 2>&1 || true
+            done
+            echo ""
+            echo "--- Flannel logs ---"
+            for pod in $(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system -l app=flannel -o name 2>/dev/null); do
                 echo "Logs for $pod:"
                 kubectl --kubeconfig "$KUBECONFIG_PATH" logs -n kube-system "$pod" --tail=50 2>&1 || true
             done
