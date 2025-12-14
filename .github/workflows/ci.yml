@@ -78,6 +78,12 @@ jobs:
           KUBECONFIG: ${{ steps.setup.outputs.kubeconfig }}
         run: |
           echo "=== Testing pod networking ==="
+          
+          # Wait for CoreDNS to be ready before testing DNS resolution
+          echo "Waiting for CoreDNS to be ready..."
+          kubectl wait --for=condition=ready --timeout=120s pod -l k8s-app=kube-dns -n kube-system
+          echo "✓ CoreDNS is ready"
+          
           kubectl run connectivity-test --image=busybox:stable --restart=Never -- sleep 300
           kubectl wait --for=condition=ready --timeout=60s pod/connectivity-test
 
