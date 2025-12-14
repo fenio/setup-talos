@@ -317,7 +317,11 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
                         
                         # Check for no critical pods failing (match Error or CrashLoopBackOff as whole words in status)
                         PODS_OUTPUT=$(kubectl --kubeconfig "$KUBECONFIG_PATH" get pods -n kube-system --no-headers 2>/dev/null)
-                        CRITICAL_FAILING=$(echo "$PODS_OUTPUT" | grep -cE '\b(Error|CrashLoopBackOff)\b' || echo "0")
+                        # Use grep -c to count matches; grep -c returns 0 (with exit code 1) when no matches
+                        CRITICAL_FAILING=$(echo "$PODS_OUTPUT" | grep -cE '\b(Error|CrashLoopBackOff)\b' || true)
+                        # Trim whitespace/newlines and default to 0
+                        CRITICAL_FAILING=$(echo "$CRITICAL_FAILING" | tr -d '[:space:]')
+                        CRITICAL_FAILING="${CRITICAL_FAILING:-0}"
                         
                         if [ "$CRITICAL_FAILING" = "0" ]; then
                             echo "✓ No critical pods failing"
