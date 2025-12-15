@@ -91,6 +91,10 @@ if [ "$PROVISIONER" = "qemu" ]; then
     echo "::endgroup::"
     
     echo "::group::Configuring network for QEMU"
+    # Load br_netfilter module (required for bridge networking)
+    echo "Loading br_netfilter kernel module..."
+    sudo modprobe br_netfilter || echo "::warning::Failed to load br_netfilter module"
+    
     # Enable IP forwarding (required for QEMU bridge networking)
     echo "Enabling IP forwarding..."
     sudo sysctl -w net.ipv4.ip_forward=1
@@ -105,6 +109,21 @@ if [ "$PROVISIONER" = "qemu" ]; then
         sudo sysctl -w net.bridge.bridge-nf-call-iptables=0
         sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=0 2>/dev/null || true
     fi
+    
+    # Pre-configure NAT masquerading for the Talos network (10.5.0.0/24)
+    # This is needed BEFORE cluster creation so VMs can reach external hosts
+    echo "Setting up NAT masquerading for Talos network..."
+    sudo iptables -t nat -A POSTROUTING -s 10.5.0.0/24 ! -d 10.5.0.0/24 -j MASQUERADE
+    
+    # Allow forwarding for the Talos network
+    sudo iptables -A FORWARD -s 10.5.0.0/24 -j ACCEPT
+    sudo iptables -A FORWARD -d 10.5.0.0/24 -j ACCEPT
+    
+    # Show current iptables rules for debugging
+    echo "Current iptables FORWARD rules:"
+    sudo iptables -L FORWARD -n -v | head -10
+    echo "Current NAT rules:"
+    sudo iptables -t nat -L POSTROUTING -n -v | head -5
     
     echo "✓ Network configured for QEMU"
     echo "::endgroup::"
@@ -240,7 +259,38 @@ echo "Creating cluster with command: $CLUSTER_CMD"
 if [ "$PROVISIONER" = "qemu" ]; then
     # QEMU provisioner requires root for CNI and KVM access
     # Use sudo -E to preserve environment, but talosconfig will be created in /root/.talos
-    sudo -E $CLUSTER_CMD
+    
+    # Run talosctl cluster create and capture output, but don't fail immediately
+    echo "Starting QEMU cluster creation (this may take several minutes)..."
+    if ! sudo -E $CLUSTER_CMD; then
+        echo "::warning::talosctl cluster create returned non-zero exit code"
+        
+        # Debug: Show network state after failure
+        echo "=== Network debugging after cluster create ==="
+        echo "Network interfaces:"
+        ip link show
+        echo ""
+        echo "IP addresses:"
+        ip addr show
+        echo ""
+        echo "Routes:"
+        ip route
+        echo ""
+        echo "Bridge interfaces:"
+        brctl show 2>/dev/null || echo "brctl not available"
+        echo ""
+        echo "QEMU processes:"
+        ps aux | grep -E "qemu|talos" | grep -v grep || echo "No QEMU processes found"
+        echo ""
+        echo "Talos state directory:"
+        sudo ls -la /root/.talos/clusters/ 2>/dev/null || echo "No clusters directory"
+        echo ""
+        echo "CNI config:"
+        sudo cat /root/.talos/cni/conf.d/*.conf 2>/dev/null || echo "No CNI config found"
+        echo "=== End network debugging ==="
+        
+        exit 1
+    fi
     
     # Copy talosconfig from root's home to user's home
     echo "Copying talosconfig from root to user home..."
