@@ -254,6 +254,51 @@ fi
 echo "✓ Talos cluster created"
 echo "::endgroup::"
 
+# Configure networking after cluster creation (QEMU)
+if [ "$PROVISIONER" = "qemu" ]; then
+    echo "::group::Configuring QEMU network routing"
+    
+    # Find the talos bridge interface (usually named after the cluster)
+    TALOS_BRIDGE=$(ip link show | grep -oE "talos[a-z0-9-]+" | head -1 || echo "")
+    
+    if [ -z "$TALOS_BRIDGE" ]; then
+        # Try alternative: look for a bridge with 10.5.0.0/24 network
+        TALOS_BRIDGE=$(ip route | grep "10.5.0.0" | awk '{print $3}' | head -1 || echo "")
+    fi
+    
+    echo "Detected Talos bridge: ${TALOS_BRIDGE:-not found}"
+    
+    # Get the primary network interface (for NAT masquerading)
+    DEFAULT_IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
+    echo "Default network interface: $DEFAULT_IFACE"
+    
+    # Enable NAT masquerading so QEMU VMs can reach external hosts
+    echo "Configuring NAT masquerading for QEMU VMs..."
+    
+    # Add masquerade rule for the Talos network (10.5.0.0/24)
+    if ! sudo iptables -t nat -C POSTROUTING -s 10.5.0.0/24 -j MASQUERADE 2>/dev/null; then
+        sudo iptables -t nat -A POSTROUTING -s 10.5.0.0/24 -j MASQUERADE
+        echo "Added MASQUERADE rule for 10.5.0.0/24"
+    else
+        echo "MASQUERADE rule already exists"
+    fi
+    
+    # Ensure FORWARD chain accepts traffic from/to the Talos network
+    sudo iptables -A FORWARD -s 10.5.0.0/24 -j ACCEPT 2>/dev/null || true
+    sudo iptables -A FORWARD -d 10.5.0.0/24 -j ACCEPT 2>/dev/null || true
+    
+    # Show routing table for debugging
+    echo "Current routes:"
+    ip route | grep -E "10.5.0|default" || true
+    
+    # Show iptables NAT rules
+    echo "NAT rules:"
+    sudo iptables -t nat -L POSTROUTING -n -v | head -10 || true
+    
+    echo "✓ QEMU network routing configured"
+    echo "::endgroup::"
+fi
+
 # Debug: Show cluster status after creation
 echo "::group::Cluster Status"
 if [ "$PROVISIONER" = "docker" ]; then
