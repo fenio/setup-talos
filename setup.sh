@@ -90,6 +90,25 @@ if [ "$PROVISIONER" = "qemu" ]; then
     echo "✓ KVM is available and accessible"
     echo "::endgroup::"
     
+    echo "::group::Configuring network for QEMU"
+    # Enable IP forwarding (required for QEMU bridge networking)
+    echo "Enabling IP forwarding..."
+    sudo sysctl -w net.ipv4.ip_forward=1
+    sudo sysctl -w net.ipv6.conf.all.forwarding=1 2>/dev/null || true
+    
+    # Set iptables FORWARD policy to ACCEPT (required for bridge traffic)
+    echo "Configuring iptables for bridge networking..."
+    sudo iptables -P FORWARD ACCEPT
+    
+    # Ensure bridge traffic is not filtered by iptables (can cause connectivity issues)
+    if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
+        sudo sysctl -w net.bridge.bridge-nf-call-iptables=0
+        sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=0 2>/dev/null || true
+    fi
+    
+    echo "✓ Network configured for QEMU"
+    echo "::endgroup::"
+    
     echo "::group::Installing QEMU dependencies"
     if command -v qemu-system-x86_64 &> /dev/null && command -v qemu-img &> /dev/null; then
         echo "✓ QEMU already installed"
