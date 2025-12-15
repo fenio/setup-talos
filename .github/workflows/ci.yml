@@ -10,7 +10,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    name: Test Talos
+    name: Test
 
     steps:
       - name: Checkout
@@ -20,12 +20,12 @@ jobs:
         run: |
           echo "=== Checking initial system state ==="
           if command -v talosctl &> /dev/null; then
-            echo "✗ talosctl already installed"
+            echo "ERROR: talosctl already installed"
             exit 1
           fi
-          echo "✓ talosctl not installed"
+          echo "OK: talosctl not installed"
 
-      - name: Setup Talos
+      - name: Setup cluster
         id: setup
         uses: ./
         with:
@@ -38,9 +38,9 @@ jobs:
       - name: Verify installation
         run: |
           echo "=== Verifying installation ==="
-          command -v talosctl && echo "✓ talosctl binary found" || { echo "✗ talosctl binary not found"; exit 1; }
+          command -v talosctl && echo "OK: talosctl binary found" || { echo "ERROR: talosctl binary not found"; exit 1; }
           talosctl version --client
-          docker ps | grep talos && echo "✓ Talos containers are running" || { echo "✗ Talos containers not running"; exit 1; }
+          docker ps | grep talos && echo "OK: Talos containers are running" || { echo "ERROR: Talos containers not running"; exit 1; }
 
       - name: Test Talos API access
         env:
@@ -71,10 +71,10 @@ jobs:
 
           POD_NAME=$(kubectl get pod -l app=nginx -o jsonpath='{.items[0].metadata.name}')
           kubectl exec "$POD_NAME" -- wget -O- http://localhost:80 | grep -q "Welcome to nginx"
-          echo "✓ Workload is functioning correctly"
+          echo "OK: Test workload is functioning correctly"
 
       - name: Test cluster cleanup
         run: |
           echo "=== Testing cluster cleanup ==="
           talosctl cluster destroy --name talos-test
-          echo "✓ Cluster destroyed successfully"
+          echo "OK: Cluster destroyed successfully"
