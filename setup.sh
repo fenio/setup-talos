@@ -18,6 +18,7 @@ TALOSCTL_ARGS="${INPUT_TALOSCTL_ARGS:-}"
 WAIT_FOR_READY="${INPUT_WAIT_FOR_READY:-true}"
 TIMEOUT="${INPUT_TIMEOUT:-300}"
 DNS_READINESS="${INPUT_DNS_READINESS:-true}"
+LOAD_NVME_MODULES="${INPUT_LOAD_NVME_MODULES:-false}"
 
 echo "Configuration: version=$VERSION, cluster-name=$CLUSTER_NAME, kubernetes-version=$KUBERNETES_VERSION, nodes=$NODES, provisioner=$PROVISIONER, wait-for-ready=$WAIT_FOR_READY, timeout=${TIMEOUT}s, dns-readiness=$DNS_READINESS"
 
@@ -64,6 +65,43 @@ if [ "$PROVISIONER" = "docker" ]; then
     sudo sysctl -w net.bridge.bridge-nf-call-iptables=1 2>/dev/null || true
     sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true
     echo "::endgroup::"
+    
+    # Load NVMe kernel modules if requested (for NVMe-oF support with Docker provisioner)
+    if [ "$LOAD_NVME_MODULES" = "true" ]; then
+        echo "::group::Loading NVMe kernel modules"
+        echo "Loading NVMe-oF TCP kernel modules on host..."
+        
+        # Load nvme-core first
+        if ! lsmod | grep -q "^nvme_core"; then
+            echo "Loading nvme-core module..."
+            sudo modprobe nvme-core || echo "::warning::Failed to load nvme-core module"
+        else
+            echo "✓ nvme-core already loaded"
+        fi
+        
+        # Load nvme-fabrics 
+        if ! lsmod | grep -q "^nvme_fabrics"; then
+            echo "Loading nvme-fabrics module..."
+            sudo modprobe nvme-fabrics || echo "::warning::Failed to load nvme-fabrics module"
+        else
+            echo "✓ nvme-fabrics already loaded"
+        fi
+        
+        # Load nvme-tcp (the key module for NVMe-oF over TCP)
+        if ! lsmod | grep -q "^nvme_tcp"; then
+            echo "Loading nvme-tcp module..."
+            sudo modprobe nvme-tcp || echo "::warning::Failed to load nvme-tcp module"
+        else
+            echo "✓ nvme-tcp already loaded"
+        fi
+        
+        # Verify modules are loaded
+        echo "Loaded NVMe modules:"
+        lsmod | grep nvme || echo "No NVMe modules found"
+        
+        echo "✓ NVMe kernel modules loaded"
+        echo "::endgroup::"
+    fi
 fi
 
 # Install QEMU and dependencies (required for QEMU provisioner)

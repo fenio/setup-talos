@@ -71,6 +71,11 @@ inputs:
     description: 'Wait for CoreDNS to be ready and verify DNS resolution works'
     required: false
     default: 'true'
+  
+  load-nvme-modules:
+    description: 'Load NVMe kernel modules on host (required for NVMe-oF with Docker provisioner)'
+    required: false
+    default: 'false'
 
 outputs:
   kubeconfig:
@@ -100,4 +105,5 @@ runs:
         INPUT_WAIT_FOR_READY: ${{ inputs.wait-for-ready }}
         INPUT_TIMEOUT: ${{ inputs.timeout }}
         INPUT_DNS_READINESS: ${{ inputs.dns-readiness }}
+        INPUT_LOAD_NVME_MODULES: ${{ inputs.load-nvme-modules }}
       run: ${{ github.action_path }}/setup.sh
