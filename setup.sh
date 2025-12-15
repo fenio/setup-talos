@@ -218,7 +218,19 @@ if [ -n "$TALOSCTL_ARGS" ]; then
 fi
 
 echo "Creating cluster with command: $CLUSTER_CMD"
-eval "$CLUSTER_CMD"
+if [ "$PROVISIONER" = "qemu" ]; then
+    # QEMU provisioner requires root for CNI and KVM access
+    # Use sudo -E to preserve environment, but talosconfig will be created in /root/.talos
+    sudo -E $CLUSTER_CMD
+    
+    # Copy talosconfig from root's home to user's home
+    echo "Copying talosconfig from root to user home..."
+    sudo mkdir -p "$HOME/.talos"
+    sudo cp /root/.talos/config "$HOME/.talos/config"
+    sudo chown -R "$(id -u):$(id -g)" "$HOME/.talos"
+else
+    eval "$CLUSTER_CMD"
+fi
 
 echo "✓ Talos cluster created"
 echo "::endgroup::"
