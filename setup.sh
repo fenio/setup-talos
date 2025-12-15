@@ -19,6 +19,7 @@ WAIT_FOR_READY="${INPUT_WAIT_FOR_READY:-true}"
 TIMEOUT="${INPUT_TIMEOUT:-300}"
 DNS_READINESS="${INPUT_DNS_READINESS:-true}"
 LOAD_NVME_MODULES="${INPUT_LOAD_NVME_MODULES:-false}"
+MOUNT_DEV="${INPUT_MOUNT_DEV:-false}"
 
 echo "Configuration: version=$VERSION, cluster-name=$CLUSTER_NAME, kubernetes-version=$KUBERNETES_VERSION, nodes=$NODES, provisioner=$PROVISIONER, wait-for-ready=$WAIT_FOR_READY, timeout=${TIMEOUT}s, dns-readiness=$DNS_READINESS"
 
@@ -269,6 +270,12 @@ CLUSTER_CMD="talosctl cluster create --name $CLUSTER_NAME --wait=false --provisi
 if [ "$PROVISIONER" = "docker" ]; then
     # Disable IPv6 to avoid network issues in Docker
     CLUSTER_CMD+=" --docker-disable-ipv6"
+    
+    # Mount /dev from host if requested (required for NVMe-oF to see dynamically created devices)
+    if [ "$MOUNT_DEV" = "true" ]; then
+        echo "Adding /dev bind mount for NVMe device visibility..."
+        CLUSTER_CMD+=" --mount type=bind,source=/dev,target=/dev"
+    fi
 elif [ "$PROVISIONER" = "qemu" ]; then
     # Add QEMU-specific options
     CLUSTER_CMD+=" --cpus $CPUS --memory $MEMORY --disk $DISK"
