@@ -263,23 +263,22 @@ echo "::endgroup::"
 echo "::group::Creating Talos cluster"
 
 # Build cluster create command
-# Skip built-in wait - we'll handle readiness checking ourselves with better diagnostics
-# Talos 1.12+ uses provisioner as a subcommand (e.g., 'talosctl cluster create docker')
-CLUSTER_CMD="talosctl cluster create $PROVISIONER --name $CLUSTER_NAME --wait=false"
+# Talos 1.12+ uses provisioner as a subcommand with simplified flags
+# The new docker/qemu subcommands have different flag sets than the old --provisioner flag
+CLUSTER_CMD="talosctl cluster create $PROVISIONER --name $CLUSTER_NAME"
 
 # Add provisioner-specific options
 if [ "$PROVISIONER" = "docker" ]; then
-    # Disable IPv6 to avoid network issues in Docker
-    CLUSTER_CMD+=" --docker-disable-ipv6"
-    
     # Mount /dev from host if requested (required for NVMe-oF to see dynamically created devices)
     if [ "$MOUNT_DEV" = "true" ]; then
         echo "Adding /dev bind mount for NVMe device visibility..."
         CLUSTER_CMD+=" --mount type=bind,source=/dev,target=/dev"
     fi
 elif [ "$PROVISIONER" = "qemu" ]; then
-    # Add QEMU-specific options
-    CLUSTER_CMD+=" --cpus $CPUS --memory $MEMORY --disk $DISK"
+    # Add QEMU-specific options (qemu subcommand uses different flag names)
+    CLUSTER_CMD+=" --cpus-controlplanes $CPUS --cpus-workers $CPUS"
+    CLUSTER_CMD+=" --memory-controlplanes ${MEMORY}MiB --memory-workers ${MEMORY}MiB"
+    CLUSTER_CMD+=" --disk ${DISK}MiB"
     
     if [ "$WITH_UEFI" = "true" ]; then
         CLUSTER_CMD+=" --with-uefi"
