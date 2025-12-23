@@ -264,7 +264,8 @@ echo "::group::Creating Talos cluster"
 
 # Build cluster create command
 # Skip built-in wait - we'll handle readiness checking ourselves with better diagnostics
-CLUSTER_CMD="talosctl cluster create --name $CLUSTER_NAME --wait=false --provisioner=$PROVISIONER"
+# Talos 1.12+ uses provisioner as a subcommand (e.g., 'talosctl cluster create docker')
+CLUSTER_CMD="talosctl cluster create $PROVISIONER --name $CLUSTER_NAME --wait=false"
 
 # Add provisioner-specific options
 if [ "$PROVISIONER" = "docker" ]; then
