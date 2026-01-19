@@ -330,12 +330,15 @@ if [ "$ISCSI_TOOLS" = "true" ]; then
     echo "Adding iSCSI tools system extension..."
     # Create a strategic merge patch file for the iscsi-tools extension
     # JSON6902 patches don't work with multi-document configs (Talos 1.8+)
+    # Extension versions must match Talos major.minor version (e.g., v1.12.0 for Talos v1.12.1)
+    TALOS_MAJOR_MINOR=$(echo "$ACTUAL_VERSION" | sed -E 's/^v?([0-9]+\.[0-9]+)\..*/v\1.0/')
+    echo "Using iscsi-tools extension version: $TALOS_MAJOR_MINOR (for Talos $ACTUAL_VERSION)"
     ISCSI_PATCH_FILE=$(mktemp)
-    cat > "$ISCSI_PATCH_FILE" << 'EOF'
+    cat > "$ISCSI_PATCH_FILE" << EOF
 machine:
   install:
     extensions:
-      - image: ghcr.io/siderolabs/iscsi-tools:v0.2.0
+      - image: ghcr.io/siderolabs/iscsi-tools:${TALOS_MAJOR_MINOR}
 EOF
     CLUSTER_CMD+=" --config-patch @${ISCSI_PATCH_FILE}"
 fi
