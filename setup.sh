@@ -387,11 +387,19 @@ if [ "$PROVISIONER" = "qemu" ]; then
         exit 1
     fi
     
-    # Copy talosconfig from root's home to user's home
-    echo "Copying talosconfig from root to user home..."
-    sudo mkdir -p "$HOME/.talos"
-    sudo cp /root/.talos/config "$HOME/.talos/config"
-    sudo chown -R "$(id -u):$(id -g)" "$HOME/.talos"
+    # With sudo -E, HOME is preserved so talosconfig is already in user's home
+    # Only copy from root if it doesn't exist in user home (fallback)
+    if [ -f "$HOME/.talos/config" ]; then
+        echo "✓ Talosconfig already exists at $HOME/.talos/config"
+    elif [ -f /root/.talos/config ]; then
+        echo "Copying talosconfig from root to user home..."
+        sudo mkdir -p "$HOME/.talos"
+        sudo cp /root/.talos/config "$HOME/.talos/config"
+        sudo chown -R "$(id -u):$(id -g)" "$HOME/.talos"
+    else
+        echo "::error::Talosconfig not found in $HOME/.talos/config or /root/.talos/config"
+        exit 1
+    fi
 else
     eval "$CLUSTER_CMD"
 fi
