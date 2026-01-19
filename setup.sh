@@ -328,9 +328,16 @@ fi
 # Add iSCSI tools system extension if requested
 if [ "$ISCSI_TOOLS" = "true" ]; then
     echo "Adding iSCSI tools system extension..."
-    # Use config-patch to add the iscsi-tools extension to the machine config
-    # This provides iscsiadm and iscsid for iSCSI storage support
-    CLUSTER_CMD+=" --config-patch '[{\"op\":\"add\",\"path\":\"/machine/install/extensions\",\"value\":[{\"image\":\"ghcr.io/siderolabs/iscsi-tools:v0.2.0\"}]}]'"
+    # Create a strategic merge patch file for the iscsi-tools extension
+    # JSON6902 patches don't work with multi-document configs (Talos 1.8+)
+    ISCSI_PATCH_FILE=$(mktemp)
+    cat > "$ISCSI_PATCH_FILE" << 'EOF'
+machine:
+  install:
+    extensions:
+      - image: ghcr.io/siderolabs/iscsi-tools:v0.2.0
+EOF
+    CLUSTER_CMD+=" --config-patch @${ISCSI_PATCH_FILE}"
 fi
 
 # Add additional args
@@ -382,6 +389,11 @@ if [ "$PROVISIONER" = "qemu" ]; then
     sudo chown -R "$(id -u):$(id -g)" "$HOME/.talos"
 else
     eval "$CLUSTER_CMD"
+fi
+
+# Cleanup temp patch file if it was created
+if [ -n "${ISCSI_PATCH_FILE:-}" ] && [ -f "$ISCSI_PATCH_FILE" ]; then
+    rm -f "$ISCSI_PATCH_FILE"
 fi
 
 echo "✓ Talos cluster created"
