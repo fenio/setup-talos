@@ -308,11 +308,7 @@ elif [ "$PROVISIONER" = "qemu" ]; then
     # Add QEMU-specific options (qemu subcommand uses different flag names)
     CLUSTER_CMD+=" --cpus-controlplanes $CPUS --cpus-workers $CPUS"
     CLUSTER_CMD+=" --memory-controlplanes ${MEMORY}MiB --memory-workers ${MEMORY}MiB"
-    CLUSTER_CMD+=" --disk ${DISK}MiB"
-    
-    if [ "$WITH_UEFI" = "true" ]; then
-        CLUSTER_CMD+=" --with-uefi"
-    fi
+    CLUSTER_CMD+=" --disks virtio:${DISK}MiB"
 fi
 
 # Add workers if specified
