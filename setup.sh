@@ -391,6 +391,9 @@ if [ "$PROVISIONER" = "qemu" ]; then
     # Only copy from root if it doesn't exist in user home (fallback)
     if [ -f "$HOME/.talos/config" ]; then
         echo "✓ Talosconfig already exists at $HOME/.talos/config"
+        # Fix permissions since file was created by sudo (root)
+        sudo chown -R "$(id -u):$(id -g)" "$HOME/.talos"
+        echo "✓ Fixed talosconfig permissions"
     elif [ -f /root/.talos/config ]; then
         echo "Copying talosconfig from root to user home..."
         sudo mkdir -p "$HOME/.talos"
@@ -399,6 +402,12 @@ if [ "$PROVISIONER" = "qemu" ]; then
     else
         echo "::error::Talosconfig not found in $HOME/.talos/config or /root/.talos/config"
         exit 1
+    fi
+
+    # Also fix kubeconfig permissions (talosctl merges it automatically)
+    if [ -f "$HOME/.kube/config" ]; then
+        sudo chown -R "$(id -u):$(id -g)" "$HOME/.kube"
+        echo "✓ Fixed kubeconfig permissions"
     fi
 else
     eval "$CLUSTER_CMD"
@@ -480,75 +489,84 @@ echo "TALOSCONFIG_PATH: $TALOSCONFIG_PATH"
 # Docker uses 10.5.0.2 by default, QEMU uses 10.5.0.2 as well (talosctl default)
 CP_NODE="10.5.0.2"
 
-# Wait for Talos API and bootstrap
-echo "::group::Bootstrapping cluster"
-START_TIME=$(date +%s)
-
-echo "Waiting for Talos API to be ready..."
-while true; do
-    ELAPSED=$(($(date +%s) - START_TIME))
-    if [ "$ELAPSED" -gt "$TIMEOUT" ]; then
-        echo "::error::Timeout waiting for Talos API"
-        if [ "$PROVISIONER" = "docker" ]; then
-            docker ps -a
-        elif [ "$PROVISIONER" = "qemu" ]; then
-            sudo virsh list --all 2>/dev/null || true
-        fi
-        exit 1
-    fi
-    
-    if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" version &>/dev/null; then
-        echo "✓ Talos API is responding"
-        break
-    fi
-    echo "Waiting for Talos API... (${ELAPSED}s)"
-    sleep 3
-done
-
-echo "Bootstrapping etcd..."
-# Bootstrap might fail if already bootstrapped, that's OK
-if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" bootstrap 2>&1; then
-    echo "✓ Bootstrap initiated"
+# For QEMU provisioner, talosctl cluster create does the full bootstrap internally
+# (including etcd, kubeconfig, CoreDNS, etc). Skip manual bootstrap for QEMU.
+if [ "$PROVISIONER" = "qemu" ]; then
+    echo "::group::Skipping manual bootstrap (QEMU handles this internally)"
+    echo "✓ QEMU provisioner completed full cluster setup during creation"
+    echo "✓ Kubeconfig was merged automatically"
+    echo "::endgroup::"
+    START_TIME=$(date +%s)
 else
-    echo "Bootstrap command returned non-zero (may already be bootstrapped)"
+    # Docker provisioner needs manual bootstrap
+
+    # Wait for Talos API and bootstrap
+    echo "::group::Bootstrapping cluster"
+    START_TIME=$(date +%s)
+
+    echo "Waiting for Talos API to be ready..."
+    while true; do
+        ELAPSED=$(($(date +%s) - START_TIME))
+        if [ "$ELAPSED" -gt "$TIMEOUT" ]; then
+            echo "::error::Timeout waiting for Talos API"
+            docker ps -a
+            exit 1
+        fi
+
+        if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" version &>/dev/null; then
+            echo "✓ Talos API is responding"
+            break
+        fi
+        echo "Waiting for Talos API... (${ELAPSED}s)"
+        sleep 3
+    done
+
+    echo "Bootstrapping etcd..."
+    # Bootstrap might fail if already bootstrapped, that's OK
+    if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" bootstrap 2>&1; then
+        echo "✓ Bootstrap initiated"
+    else
+        echo "Bootstrap command returned non-zero (may already be bootstrapped)"
+    fi
+
+    echo "Waiting for etcd to be healthy..."
+    while true; do
+        ELAPSED=$(($(date +%s) - START_TIME))
+        if [ "$ELAPSED" -gt "$TIMEOUT" ]; then
+            echo "::error::Timeout waiting for etcd"
+            talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" services || true
+            exit 1
+        fi
+
+        if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" service etcd 2>&1 | grep -q "STATE.*Running"; then
+            echo "✓ etcd is running"
+            break
+        fi
+        echo "Waiting for etcd... (${ELAPSED}s)"
+        sleep 3
+    done
+    echo "::endgroup::"
+
+    # Get kubeconfig
+    echo "::group::Configuring kubectl"
+    echo "Waiting for Kubernetes API to be available..."
+    while true; do
+        ELAPSED=$(($(date +%s) - START_TIME))
+        if [ "$ELAPSED" -gt "$TIMEOUT" ]; then
+            echo "::error::Timeout waiting for Kubernetes API"
+            talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" services || true
+            exit 1
+        fi
+
+        if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" kubeconfig "$KUBECONFIG_PATH" --force 2>/dev/null; then
+            echo "✓ Kubeconfig retrieved"
+            break
+        fi
+        echo "Waiting for kubeconfig... (${ELAPSED}s)"
+        sleep 3
+    done
+    echo "::endgroup::"
 fi
-
-echo "Waiting for etcd to be healthy..."
-while true; do
-    ELAPSED=$(($(date +%s) - START_TIME))
-    if [ "$ELAPSED" -gt "$TIMEOUT" ]; then
-        echo "::error::Timeout waiting for etcd"
-        talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" services || true
-        exit 1
-    fi
-    
-    if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" service etcd 2>&1 | grep -q "STATE.*Running"; then
-        echo "✓ etcd is running"
-        break
-    fi
-    echo "Waiting for etcd... (${ELAPSED}s)"
-    sleep 3
-done
-echo "::endgroup::"
-
-# Get kubeconfig
-echo "::group::Configuring kubectl"
-echo "Waiting for Kubernetes API to be available..."
-while true; do
-    ELAPSED=$(($(date +%s) - START_TIME))
-    if [ "$ELAPSED" -gt "$TIMEOUT" ]; then
-        echo "::error::Timeout waiting for Kubernetes API"
-        talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" services || true
-        exit 1
-    fi
-    
-    if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" kubeconfig "$KUBECONFIG_PATH" --force 2>/dev/null; then
-        echo "✓ Kubeconfig retrieved"
-        break
-    fi
-    echo "Waiting for kubeconfig... (${ELAPSED}s)"
-    sleep 3
-done
 
 # Set outputs
 echo "talosconfig=$TALOSCONFIG_PATH" >> "$GITHUB_OUTPUT"
