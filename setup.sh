@@ -328,19 +328,44 @@ fi
 # Add iSCSI tools system extension if requested
 if [ "$ISCSI_TOOLS" = "true" ]; then
     echo "Adding iSCSI tools system extension..."
-    # Create a strategic merge patch file for the iscsi-tools extension
-    # JSON6902 patches don't work with multi-document configs (Talos 1.8+)
-    # Extension versions must match Talos major.minor version (e.g., v1.12.0 for Talos v1.12.1)
-    TALOS_MAJOR_MINOR=$(echo "$ACTUAL_VERSION" | sed -E 's/^v?([0-9]+\.[0-9]+)\..*/v\1.0/')
-    echo "Using iscsi-tools extension version: $TALOS_MAJOR_MINOR (for Talos $ACTUAL_VERSION)"
-    ISCSI_PATCH_FILE=$(mktemp)
-    cat > "$ISCSI_PATCH_FILE" << EOF
+
+    if [ "$PROVISIONER" = "docker" ]; then
+        # For Docker provisioner, config patches for extensions don't work because
+        # Docker containers don't go through the install phase. We need to use
+        # Image Factory to get a Talos image with extensions pre-installed.
+        echo "Using Image Factory to build Talos image with iscsi-tools for Docker..."
+
+        # Generate schematic via Image Factory API
+        SCHEMATIC_RESPONSE=$(curl -s -X POST https://factory.talos.dev/schematics -H "Content-Type: application/yaml" -d '
+customization:
+  systemExtensions:
+    officialExtensions:
+      - siderolabs/iscsi-tools
+')
+        SCHEMATIC_ID=$(echo "$SCHEMATIC_RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+
+        if [ -z "$SCHEMATIC_ID" ]; then
+            echo "::warning::Failed to get schematic ID from Image Factory, response: $SCHEMATIC_RESPONSE"
+            echo "Falling back to standard image without iscsi-tools extension"
+        else
+            FACTORY_IMAGE="factory.talos.dev/installer/${SCHEMATIC_ID}:${ACTUAL_VERSION}"
+            echo "Using Image Factory image: $FACTORY_IMAGE"
+            CLUSTER_CMD+=" --image $FACTORY_IMAGE"
+        fi
+    else
+        # For QEMU/bare metal, use config patch (extensions are installed during Talos install phase)
+        # Extension versions must match Talos major.minor version (e.g., v1.12.0 for Talos v1.12.1)
+        TALOS_MAJOR_MINOR=$(echo "$ACTUAL_VERSION" | sed -E 's/^v?([0-9]+\.[0-9]+)\..*/v\1.0/')
+        echo "Using iscsi-tools extension version: $TALOS_MAJOR_MINOR (for Talos $ACTUAL_VERSION)"
+        ISCSI_PATCH_FILE=$(mktemp)
+        cat > "$ISCSI_PATCH_FILE" << EOF
 machine:
   install:
     extensions:
       - image: ghcr.io/siderolabs/iscsi-tools:${TALOS_MAJOR_MINOR}
 EOF
-    CLUSTER_CMD+=" --config-patch @${ISCSI_PATCH_FILE}"
+        CLUSTER_CMD+=" --config-patch @${ISCSI_PATCH_FILE}"
+    fi
 fi
 
 # Add additional args
