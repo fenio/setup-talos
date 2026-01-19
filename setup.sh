@@ -330,11 +330,9 @@ if [ "$ISCSI_TOOLS" = "true" ]; then
     echo "Adding iSCSI tools system extension..."
 
     if [ "$PROVISIONER" = "docker" ]; then
-        # For Docker provisioner, we need to upgrade after cluster creation.
-        # Image Factory only provides installer images, not runtime images.
-        # We'll boot with standard image, then upgrade to apply the extension.
-        echo "Will upgrade to install iscsi-tools extension after cluster is ready..."
-        ISCSI_UPGRADE_AFTER_BOOT="true"
+        # Docker provisioner doesn't support extensions - no install phase, no upgrades.
+        # Use QEMU provisioner for iSCSI tests instead.
+        echo "::warning::iSCSI tools extension not supported with Docker provisioner. Use QEMU provisioner instead."
     else
         # For QEMU/bare metal, use config patch (extensions are installed during Talos install phase)
         # Extension versions must match Talos major.minor version (e.g., v1.12.0 for Talos v1.12.1)
@@ -702,52 +700,6 @@ if [ "$WAIT_FOR_READY" = "true" ]; then
         echo "Cluster not ready yet, waiting... (${ELAPSED}/${TIMEOUT}s)"
         sleep 5
     done
-fi
-
-# Apply iSCSI tools extension via upgrade (Docker provisioner only)
-if [ "${ISCSI_UPGRADE_AFTER_BOOT:-false}" = "true" ]; then
-    echo "::group::Applying iSCSI tools extension via upgrade"
-
-    # Pre-computed schematic ID for iscsi-tools extension
-    # Generated from: customization.systemExtensions.officialExtensions: [siderolabs/iscsi-tools]
-    SCHEMATIC_ID="c9078f9419961640c712a8bf2bb9174933dfcf1da383fd8ea2b7dc21493f8bac"
-    UPGRADE_IMAGE="factory.talos.dev/installer/${SCHEMATIC_ID}:${ACTUAL_VERSION}"
-
-    echo "Upgrading Talos to apply iscsi-tools extension..."
-    echo "Upgrade image: $UPGRADE_IMAGE"
-
-    # Get all nodes
-    NODES=$(talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" get members -o jsonpath='{.items[*].spec.addresses[0]}' 2>/dev/null | tr ' ' ',')
-    if [ -z "$NODES" ]; then
-        NODES="$CP_NODE"
-    fi
-    echo "Upgrading nodes: $NODES"
-
-    # Upgrade each node
-    for NODE in $(echo "$NODES" | tr ',' ' '); do
-        echo "Upgrading node $NODE..."
-        if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$NODE" upgrade --image "$UPGRADE_IMAGE" --preserve --wait; then
-            echo "✓ Node $NODE upgraded successfully"
-        else
-            echo "::warning::Failed to upgrade node $NODE"
-        fi
-    done
-
-    # Wait for nodes to be ready again
-    echo "Waiting for nodes to be ready after upgrade..."
-    sleep 10
-    kubectl --kubeconfig "$KUBECONFIG_PATH" wait --for=condition=ready node --all --timeout=300s || true
-
-    # Verify iscsiadm is available
-    echo "Verifying iscsi-tools extension..."
-    if talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" get extensions 2>/dev/null | grep -q "iscsi-tools"; then
-        echo "✓ iscsi-tools extension is installed"
-    else
-        echo "::warning::iscsi-tools extension not found in extensions list"
-        talosctl --talosconfig "$TALOSCONFIG_PATH" --nodes "$CP_NODE" get extensions 2>/dev/null || true
-    fi
-
-    echo "::endgroup::"
 fi
 
 # DNS readiness check (if requested)
