@@ -20,6 +20,7 @@ TIMEOUT="${INPUT_TIMEOUT:-300}"
 DNS_READINESS="${INPUT_DNS_READINESS:-true}"
 LOAD_NVME_MODULES="${INPUT_LOAD_NVME_MODULES:-false}"
 MOUNT_DEV="${INPUT_MOUNT_DEV:-false}"
+ISCSI_TOOLS="${INPUT_ISCSI_TOOLS:-false}"
 
 echo "Configuration: version=$VERSION, cluster-name=$CLUSTER_NAME, kubernetes-version=$KUBERNETES_VERSION, nodes=$NODES, provisioner=$PROVISIONER, wait-for-ready=$WAIT_FOR_READY, timeout=${TIMEOUT}s, dns-readiness=$DNS_READINESS"
 
@@ -101,6 +102,35 @@ if [ "$PROVISIONER" = "docker" ]; then
         lsmod | grep nvme || echo "No NVMe modules found"
         
         echo "✓ NVMe kernel modules loaded"
+        echo "::endgroup::"
+    fi
+
+    # Install open-iscsi on host if iSCSI tools requested (for Docker provisioner)
+    if [ "$ISCSI_TOOLS" = "true" ]; then
+        echo "::group::Installing open-iscsi on host"
+        echo "Installing open-iscsi for iSCSI storage support..."
+
+        if command -v iscsiadm &> /dev/null; then
+            echo "✓ open-iscsi already installed"
+        else
+            echo "Installing open-iscsi package..."
+            sudo apt-get update
+            sudo apt-get install -y open-iscsi
+            echo "✓ open-iscsi installed"
+        fi
+
+        # Start and enable iscsid service
+        echo "Starting iscsid service..."
+        sudo systemctl enable iscsid 2>/dev/null || true
+        sudo systemctl start iscsid 2>/dev/null || true
+
+        # Verify iscsiadm is available
+        if command -v iscsiadm &> /dev/null; then
+            echo "✓ iscsiadm is available: $(which iscsiadm)"
+        else
+            echo "::warning::iscsiadm not found after installation"
+        fi
+
         echo "::endgroup::"
     fi
 fi
@@ -293,6 +323,14 @@ fi
 # Add Kubernetes version if specified
 if [ -n "$KUBERNETES_VERSION" ]; then
     CLUSTER_CMD+=" --kubernetes-version $KUBERNETES_VERSION"
+fi
+
+# Add iSCSI tools system extension if requested
+if [ "$ISCSI_TOOLS" = "true" ]; then
+    echo "Adding iSCSI tools system extension..."
+    # Use config-patch to add the iscsi-tools extension to the machine config
+    # This provides iscsiadm and iscsid for iSCSI storage support
+    CLUSTER_CMD+=" --config-patch '[{\"op\":\"add\",\"path\":\"/machine/install/extensions\",\"value\":[{\"image\":\"ghcr.io/siderolabs/iscsi-tools:v0.2.0\"}]}]'"
 fi
 
 # Add additional args

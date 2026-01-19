@@ -76,9 +76,14 @@ inputs:
     description: 'Load NVMe kernel modules on host (required for NVMe-oF with Docker provisioner)'
     required: false
     default: 'false'
-  
+
   mount-dev:
     description: 'Bind mount /dev from host into containers (Docker only, required for NVMe-oF to see dynamically created devices)'
+    required: false
+    default: 'false'
+
+  iscsi-tools:
+    description: 'Install iSCSI tools system extension (provides iscsiadm for iSCSI storage)'
     required: false
     default: 'false'
 
@@ -112,4 +117,5 @@ runs:
         INPUT_DNS_READINESS: ${{ inputs.dns-readiness }}
         INPUT_LOAD_NVME_MODULES: ${{ inputs.load-nvme-modules }}
         INPUT_MOUNT_DEV: ${{ inputs.mount-dev }}
+        INPUT_ISCSI_TOOLS: ${{ inputs.iscsi-tools }}
       run: ${{ github.action_path }}/setup.sh
