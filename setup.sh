@@ -330,18 +330,24 @@ if [ "$ISCSI_TOOLS" = "true" ]; then
         # Use QEMU provisioner for iSCSI tests instead.
         echo "::warning::iSCSI tools extension not supported with Docker provisioner. Use QEMU provisioner instead."
     else
-        # For QEMU/bare metal, use config patch (extensions are installed during Talos install phase)
-        # Extension versions must match Talos major.minor version (e.g., v1.12.0 for Talos v1.12.1)
-        TALOS_MAJOR_MINOR=$(echo "$ACTUAL_VERSION" | sed -E 's/^v?([0-9]+\.[0-9]+)\..*/v\1.0/')
-        echo "Using iscsi-tools extension version: $TALOS_MAJOR_MINOR (for Talos $ACTUAL_VERSION)"
-        ISCSI_PATCH_FILE=$(mktemp)
-        cat > "$ISCSI_PATCH_FILE" << EOF
-machine:
-  install:
-    extensions:
-      - image: ghcr.io/siderolabs/iscsi-tools:${TALOS_MAJOR_MINOR}
-EOF
-        CLUSTER_CMD+=" --config-patch @${ISCSI_PATCH_FILE}"
+        # For QEMU provisioner, use Image Factory schematic to include extensions
+        # Config patches with machine.install.extensions don't work with iso preset (no install phase)
+        echo "Creating Image Factory schematic with iscsi-tools extension..."
+
+        SCHEMATIC_RESPONSE=$(curl -sX POST https://factory.talos.dev/schematics \
+            -H "Content-Type: application/json" \
+            -d '{"customization":{"systemExtensions":{"officialExtensions":["siderolabs/iscsi-tools"]}}}')
+
+        SCHEMATIC_ID=$(echo "$SCHEMATIC_RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+
+        if [ -z "$SCHEMATIC_ID" ]; then
+            echo "::error::Failed to create Image Factory schematic"
+            echo "Response: $SCHEMATIC_RESPONSE"
+            exit 1
+        fi
+
+        echo "Using schematic ID: $SCHEMATIC_ID"
+        CLUSTER_CMD+=" --schematic-id $SCHEMATIC_ID"
     fi
 fi
 
@@ -413,10 +419,6 @@ else
     eval "$CLUSTER_CMD"
 fi
 
-# Cleanup temp patch file if it was created
-if [ -n "${ISCSI_PATCH_FILE:-}" ] && [ -f "$ISCSI_PATCH_FILE" ]; then
-    rm -f "$ISCSI_PATCH_FILE"
-fi
 
 echo "✓ Talos cluster created"
 echo "::endgroup::"
